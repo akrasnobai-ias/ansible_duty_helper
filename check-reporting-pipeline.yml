@@ -1,0 +1,185 @@
+---
+- name: Check reporting pipeline
+  hosts: gateway
+  tasks:
+    - name: Setup dates
+      set_fact:
+        today: "{{ '%Y%m%d'|strftime(ansible_date_time.epoch) }}"
+        yesterday: "{{ '%Y%m%d'|strftime(ansible_date_time.epoch|int - 86400) }}"
+        yesterday_hyp: "{{ '%Y-%m-%d'|strftime(ansible_date_time.epoch|int - 86400) }}"
+      tags:
+        - always
+
+    - name: "Log collection: FW logs: 24 buckets ready"
+      shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/log_collection/LOG_READY_{{ yesterday }}[0-2]*"
+      register: command_result
+      failed_when: "command_result.stdout_lines|length < 24"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h1
+        - log_coll
+
+    - name: "Log collection: DT logs 23+ buckets ready"
+      shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/log_collection -name DT_READY_{{ yesterday }}[0-2]*"
+      register: command_result
+      failed_when: "command_result.stdout_lines|length < 23"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h1
+        - log_coll
+
+    - name: "EventAgg: 23+ log buckets aggregated"
+      shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/ias/eventagg/archive -name {{ yesterday }}[0-2]*"
+      register: command_result
+      failed_when: "command_result.stdout_lines|length < 23"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h1
+        - proc_fw
+
+    - name: "EventAgg: 23th bucket is in_progress or done"
+      block:
+        - name: "Event: 23th bucket is done"
+          command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/ias/eventagg/archive/{{ yesterday }}2300"
+          changed_when: False
+      rescue:
+        - name: "Event: 23th bucket is in_progress"
+          command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/ias/eventagg/in_progress/{{ yesterday }}2300"
+          changed_when: False
+          ignore_errors: yes
+      tags:
+        - h1
+        - proc_fw
+
+    - name: "Q2: aggregated or merged 22+ buckets"
+      block:
+        - name: "Q2: aggregated 22+ buckets"
+          shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/ias/aggregate/archive/{{ yesterday }}[0-2]*"
+          register: command_result
+          failed_when: "command_result.stdout_lines|length < 22"
+          changed_when: False
+      rescue:
+        - name: "Q2: merge&score 22+ buckets"
+          shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/ias/mergeandscore/archive/{{ yesterday }}[0-2]*"
+          register: command_result
+          failed_when: "command_result.stdout_lines|length < 22"
+          changed_when: False
+          ignore_errors: yes
+      tags:
+        - h1
+        - qlog
+
+    - name: "Log collection: DT logs are ready for yesterday"
+      shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/log_collection/DT_READY_{{ yesterday }}[0-2]*"
+      register: command_result
+      failed_when: "command_result.stdout_lines|length < 24"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h2
+        - log_coll
+
+    - name: "Log collection: DT logs are collected for 0th bucket"
+      command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/log_collection/DT_READY_{{ today }}00"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h2
+        - log_coll
+
+    - name: Event log reaggregation is in_progress or done
+      block:
+        - name: Event log reaggregation is done
+          command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/ias/eventreagg/archive/{{ yesterday }}0000"
+          changed_when: False
+      rescue:
+        - name: Event log reaggregation is in_progress
+          command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/ias/eventreagg/in_progress/{{ yesterday }}0000"
+          changed_when: False
+          ignore_errors: yes
+      tags:
+        - h2
+        - proc_fw
+
+    - name: Agency lookups exist
+      command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/aggcontroller/archive/AGENCY_DO_LOOKUPS_EXIST.{{ yesterday }}"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h2
+        - do_lookup
+
+    - name: Network lookups exist
+      command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/aggcontroller/archive/NETWORK_DO_LOOKUPS_EXIST.{{ yesterday }}"
+      changed_when: False
+      ignore_errors: yes
+      tags:
+        - h2
+        - do_lookup
+
+    - name: "Q2: aggregated or merged 23+ buckets"
+      block:
+        - name: "Q2: aggregated 23+ buckets"
+          shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/ias/aggregate/archive/{{ yesterday }}[0-2]*"
+          register: command_result
+          failed_when: "command_result.stdout_lines|length < 23"
+          changed_when: False
+      rescue:
+        - name: "Q2: merge&scored 23+ buckets"
+          shell: "hdfs dfs -ls /user/{{ hdfs_user }}/status/ias/mergeandscore/archive/{{ yesterday }}[0-2]*"
+          register: command_result
+          failed_when: "command_result.stdout_lines|length < 23"
+          changed_when: False
+          ignore_errors: yes
+      tags:
+        - h2
+        - qlog
+
+    - name: "Check marting status"
+      block:
+        - name: "Marting is complete"
+          command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/aggcontroller/archive/{{ yesterday }}.*"
+          changed_when: False
+          tags:
+            - h3
+            - h4
+      rescue:
+        - name: "h3: Marting scripts"
+          include_tasks: "include/check_marting.yml"
+          loop_control:
+            loop_var: script
+          with_items:
+            - bsp_mart.sh
+            - generate_video_stats.sh
+            - network_mart_mfraud.sh
+            - agency_mart_mfraud.sh
+            - agency_mart.sh
+          tags:
+            - h3
+        - name: "h4: Marting scripts"
+          include_tasks: "include/check_marting.yml"
+          loop_control:
+            loop_var: script
+          with_items:
+            - nls_mart_1.0.sh
+            - generate_fraud_evidence.sh
+            - network_mart_traq.sh
+            - network_mart_uem.sh
+            - network_mart_main.sh
+            - network_mart.sh
+            - agency_mart_platform2.sh
+            - agency_mart_main.sh
+            - adtalk_collisions.sh
+            - agency_mart_traq.sh
+            - agency_mart_uem.sh
+            - network_mart_quality_pub.sh
+            - agency_mart_coll.sh
+            - network_mart_quality.sh
+            - agency_mart_quality.sh
+          tags:
+            - h4
+      tags:
+        - mart

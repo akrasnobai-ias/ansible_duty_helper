@@ -1,0 +1,4 @@
+- name: "{{ script }} is COMPLETED"
+  command: "hdfs dfs -test -f /user/{{ hdfs_user }}/status/aggcontroller/in_progress/{{ script }}.{{ yesterday }}"
+  changed_when: False
+  ignore_errors: yes
